@@ -1,0 +1,10 @@
+[package]
+name = "rsplay"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+rsmpeg = "0.14.1"
+rusty_ffmpeg = "0.13.1+ffmpeg.6.0"

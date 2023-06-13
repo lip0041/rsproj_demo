@@ -1,2 +1,14 @@
-mod linked_list;
+mod queue;
 mod stack;
+mod queue_using_stack;
+mod stack_using_queue;
+mod heap;
+mod avl_tree;
+mod union_find;
+mod binary_search_tree;
+mod graph;
+mod treap;
+mod b_tree;
+mod trie;
+mod rb_tree;
+mod segment_tree;
