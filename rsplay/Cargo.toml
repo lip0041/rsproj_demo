@@ -5,8 +5,8 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
-[env]
-FFMPEG_PKG_CONFIG_PATH = "/Users/lip0041/Code/rsmpeg/tmp/ffmpeg_build/lib/pkg-config"
+# [env]
+# FFMPEG_PKG_CONFIG_PATH = { name = "/Users/lip0041/Code/rsmpeg/tmp/ffmpeg_build/lib/pkg-config",  force = true}
 
 [dependencies]
 rsmpeg = "0.14.1"
