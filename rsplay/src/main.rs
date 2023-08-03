@@ -6,7 +6,9 @@ use rsmpeg::avutil::{AVFrame, AVFrameWithImage, AVImage};
 use rsmpeg::error::RsmpegError;
 use rsmpeg::ffi::{self, AV_INPUT_BUFFER_PADDING_SIZE};
 use rsmpeg::swscale::SwsContext;
-// use sdl2;
+use sdl2;
+use sdl2::event::Event;
+use sdl2::keyboard::Keycode;
 use std::{
     error::Error,
     ffi::{CStr, CString},
@@ -90,7 +92,7 @@ fn main() -> Result<(), RsmpegError> {
         .position(|stream| stream.codecpar().codec_type().is_video())
         .unwrap();
 
-    let decode_context = {
+    let mut decode_context = {
         let video_stream = input_format_context
             .streams()
             .get(video_stream_index)
@@ -114,7 +116,7 @@ fn main() -> Result<(), RsmpegError> {
 
     let mut frame_rgb = AVFrameWithImage::new(image_buffer);
 
-    let sws_context = SwsContext::get_context(
+    let mut sws_context = SwsContext::get_context(
         decode_context.width,
         decode_context.height,
         decode_context.pix_fmt,
@@ -131,62 +133,31 @@ fn main() -> Result<(), RsmpegError> {
         .create(true)
         .open("assets/decode/out.h264")
         .unwrap();
-    // let sdl_context = sdl2::init().unwrap();
-    // let video_subsystem = sdl_context.video().unwrap();
-    // let audio_subsystem = sdl_context.audio().unwrap();
-    // let event_pump = sdl_context.event_pump().unwrap();
+    let sdl_context = sdl2::init().unwrap();
+    let video_subsystem = sdl_context.video().unwrap();
+    let audio_subsystem = sdl_context.audio().unwrap();
+    let mut event_pump = sdl_context.event_pump().unwrap();
 
-    // let window = video_subsystem
-    //     .window("rsplay", 960, 540)
-    //     .position_centered()
-    //     .opengl()
-    //     .build()
-    //     .map_err(|e| e.to_string())
-    //     .unwrap();
+    let window = video_subsystem
+        .window("rsplay", 640, 360)
+        .position_centered()
+        .opengl()
+        .build()
+        .map_err(|e| e.to_string())
+        .unwrap();
 
-    // let mut canvas = window
-    //     .into_canvas()
-    //     .build()
-    //     .map_err(|e| e.to_string())
-    //     .unwrap();
+    let mut canvas = window
+        .into_canvas()
+        .build()
+        .map_err(|e| e.to_string())
+        .unwrap();
 
-    // let texture_creator = canvas.texture_creator();
-    // let mut texture = texture_creator
-    //     .create_texture_streaming(sdl2::pixels::PixelFormatEnum::IYUV, 1920, 1080)
-    //     .map_err(|e| e.to_string())
-    //     .unwrap();
+    let texture_creator = canvas.texture_creator();
+    let mut texture = texture_creator
+        .create_texture_streaming(sdl2::pixels::PixelFormatEnum::IYUV, 640, 360)
+        .map_err(|e| e.to_string())
+        .unwrap();
 
-    // texture
-    //     .with_lock(None, |buffer: &mut [u8], pitch: usize| {
-    //         let w = 256;
-    //         let h = 256;
-
-    //         for y in 0..h {
-    //             for x in 0..w {
-    //                 let offset = y * pitch + x;
-    //                 buffer[offset] = 128;
-    //             }
-    //         }
-
-    //         let y_size = pitch * h;
-
-    //         for y in 0..h / 2 {
-    //             for x in 0..w / 2 {
-    //                 let u_offset = y_size + y * pitch / 2 + x;
-    //                 let v_offset = y_size + (pitch / 2 * h / 2) + y * pitch / 2 + x;
-    //                 buffer[u_offset] = (x * 2) as u8;
-    //                 buffer[v_offset] = (y * 2) as u8;
-    //             }
-    //         }
-    //     })
-    //     .unwrap();
-
-    // canvas.clear();
-
-    // canvas
-    //     .copy(&texture, None, sdl2::rect::Rect::new(100, 100, 1280, 720))
-    //     .unwrap();
-    // canvas.present();
     let start_code0 = &[0u8, 0, 0, 1];
     let start_code1 = &[0u8, 0, 1];
 
@@ -194,7 +165,7 @@ fn main() -> Result<(), RsmpegError> {
     // println!("{:?}, len: {}", out_header, out_header.len());
     // return Ok(());
     let mut i = 0;
-    while let Some(packet) = input_format_context.read_packet().unwrap() {
+    'running: while let Some(packet) = input_format_context.read_packet().unwrap() {
         if packet.stream_index != video_stream_index as i32 {
             continue;
         } else {
@@ -263,7 +234,6 @@ fn main() -> Result<(), RsmpegError> {
             // let h264 =  unsafe { slice::from_raw_parts(packet.data, packet.size as usize)} ;
             // file.write_all(&h264[0..]).unwrap();
         }
-        continue;
         decode_context.send_packet(Some(&packet))?;
 
         loop {
@@ -278,20 +248,42 @@ fn main() -> Result<(), RsmpegError> {
             sws_context.scale_frame(&frame, 0, decode_context.height, &mut frame_rgb)?;
 
             i += 1;
-            // file_save(&frame_rgb, &mut file);
-            // let (y, u, v) = (frame_rgb.data[0], frame_rgb.data[1], frame_rgb.data[2]);
-            // let size: usize = (frame_rgb.width * frame_rgb.height).try_into().unwrap();
-            // let (y_buf, u_buf, v_buf) = (
-            //     unsafe { slice::from_raw_parts(y, size as usize) },
-            //     unsafe { slice::from_raw_parts(u, size / 4 as usize) },
-            //     unsafe { slice::from_raw_parts(v, size / 4 as usize) },
-            // );
+            let (y, u, v) = (frame_rgb.data[0], frame_rgb.data[1], frame_rgb.data[2]);
+            let size: usize = (frame_rgb.width * frame_rgb.height).try_into().unwrap();
+            let (y_buf, u_buf, v_buf) = (
+                unsafe { slice::from_raw_parts(y, size as usize) },
+                unsafe { slice::from_raw_parts(u, size / 4 as usize) },
+                unsafe { slice::from_raw_parts(v, size / 4 as usize) },
+            );
+            texture
+                .update_yuv(None, y_buf, 640, u_buf, 320, v_buf, 320)
+                .unwrap();
 
-            if i >= 2 {
-                break;
-            }
+            canvas.clear();
+
+            canvas
+                .copy(&texture, None, sdl2::rect::Rect::new(0, 0, 640, 360))
+                .unwrap();
+            canvas.present();
+            // if i >= 2 {
+            //     break;
+            // }
             // file_save(&frame_rgb, &mut file);
+            let time = std::time::Duration::from_millis(30);
+            std::thread::sleep(time);
+
+            for event in event_pump.poll_iter() {
+                match event {
+                    Event::Quit { .. }
+                    | Event::KeyDown {
+                        keycode: Some(Keycode::Escape),
+                        ..
+                    } => break 'running,
+                    _ => {}
+                }
+            }
         }
+
     }
     Ok(())
 }
