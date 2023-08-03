@@ -4,11 +4,12 @@ use rsmpeg::avcodec::{AVCodec, AVCodecContext, AVCodecParserContext, AVPacket};
 use rsmpeg::avformat::AVFormatContextInput;
 use rsmpeg::avutil::{AVFrame, AVFrameWithImage, AVImage};
 use rsmpeg::error::RsmpegError;
-use rsmpeg::ffi::{self, AV_INPUT_BUFFER_PADDING_SIZE};
+use rsmpeg::ffi::{self, fileno, AV_INPUT_BUFFER_PADDING_SIZE};
 use rsmpeg::swscale::SwsContext;
 use sdl2;
 use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
+use std::env;
 use std::{
     error::Error,
     ffi::{CStr, CString},
@@ -78,9 +79,16 @@ fn decode(
 }
 
 fn main() -> Result<(), RsmpegError> {
-    // dump_av_info(&CString::new("assets/bunny_1080p.mp4").unwrap()).unwrap();
-    // decode_mp4_file("assets/bunny_1080p.mp4").unwrap();
-    let file = CString::new("assets/360p.mp4").unwrap();
+    let args: Vec<String> = env::args().collect();
+    let mut file_name = String::from("assets/luca_720p.mp4");
+    if args.len() == 2 {
+        file_name = "assets/".to_string();
+        file_name += &args[1];
+    }
+
+    // dump_av_info(&CString::new("assets/luca_720p.mp4").unwrap()).unwrap();
+    // decode_mp4_file("assets/luca_720p.mp4").unwrap();
+    let file = CString::new(file_name).unwrap();
 
     let mut input_format_context = AVFormatContextInput::open(&file)?;
 
@@ -106,6 +114,13 @@ fn main() -> Result<(), RsmpegError> {
         decode_context
     };
 
+    let frame_rate = input_format_context
+        .streams()
+        .get(video_stream_index)
+        .unwrap()
+        .avg_frame_rate;
+
+    let video_fps = (frame_rate.num as f64 / frame_rate.den as f64) as u64;
     let image_buffer = AVImage::new(
         ffi::AVPixelFormat_AV_PIX_FMT_YUV420P,
         decode_context.width,
@@ -139,7 +154,11 @@ fn main() -> Result<(), RsmpegError> {
     let mut event_pump = sdl_context.event_pump().unwrap();
 
     let window = video_subsystem
-        .window("rsplay", 640, 360)
+        .window(
+            "rsplay",
+            decode_context.width as u32,
+            decode_context.height as u32,
+        )
         .position_centered()
         .opengl()
         .build()
@@ -154,7 +173,11 @@ fn main() -> Result<(), RsmpegError> {
 
     let texture_creator = canvas.texture_creator();
     let mut texture = texture_creator
-        .create_texture_streaming(sdl2::pixels::PixelFormatEnum::IYUV, 640, 360)
+        .create_texture_streaming(
+            sdl2::pixels::PixelFormatEnum::IYUV,
+            decode_context.width as u32,
+            decode_context.height as u32,
+        )
         .map_err(|e| e.to_string())
         .unwrap();
 
@@ -256,20 +279,37 @@ fn main() -> Result<(), RsmpegError> {
                 unsafe { slice::from_raw_parts(v, size / 4 as usize) },
             );
             texture
-                .update_yuv(None, y_buf, 640, u_buf, 320, v_buf, 320)
+                .update_yuv(
+                    None,
+                    y_buf,
+                    decode_context.width as usize,
+                    u_buf,
+                    (decode_context.width / 2) as usize,
+                    v_buf,
+                    (decode_context.width / 2) as usize,
+                )
                 .unwrap();
 
             canvas.clear();
 
             canvas
-                .copy(&texture, None, sdl2::rect::Rect::new(0, 0, 640, 360))
+                .copy(
+                    &texture,
+                    None,
+                    sdl2::rect::Rect::new(
+                        0,
+                        0,
+                        decode_context.width as u32,
+                        decode_context.height as u32,
+                    ),
+                )
                 .unwrap();
             canvas.present();
             // if i >= 2 {
             //     break;
             // }
             // file_save(&frame_rgb, &mut file);
-            let time = std::time::Duration::from_millis(30);
+            let time = std::time::Duration::from_millis(video_fps);
             std::thread::sleep(time);
 
             for event in event_pump.poll_iter() {
@@ -283,7 +323,6 @@ fn main() -> Result<(), RsmpegError> {
                 }
             }
         }
-
     }
     Ok(())
 }

@@ -11,3 +11,9 @@ edition = "2021"
 [dependencies]
 rsmpeg = "0.14.1"
 sdl2 = "0.35"
+
+[profile.release]
+opt-level = 'z'
+lto = true
+codegen-units = 1
+panic = 'abort'
