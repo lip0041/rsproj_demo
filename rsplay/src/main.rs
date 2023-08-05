@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 #![allow(unused)]
-mod sdl2_display;
+// mod sdl2_display;
 mod utils;
 
 use rsmpeg::avcodec::{AVCodec, AVCodecContext, AVCodecParserContext, AVPacket};
@@ -9,9 +9,9 @@ use rsmpeg::avutil::{AVFrame, AVFrameWithImage, AVImage};
 use rsmpeg::error::RsmpegError;
 use rsmpeg::ffi::{self, fileno, AV_INPUT_BUFFER_PADDING_SIZE};
 use rsmpeg::swscale::SwsContext;
-use sdl2;
-use sdl2::event::Event;
-use sdl2::keyboard::Keycode;
+// use sdl2;
+// use sdl2::event::Event;
+// use sdl2::keyboard::Keycode;
 use std::env;
 use std::{
     error::Error,
@@ -21,7 +21,7 @@ use std::{
     slice,
 };
 
-use sdl2_display::display_init;
+// use sdl2_display::display_init;
 use utils::dump_av_info;
 use utils::file_save_yuv420p;
 use utils::h264_extradata_to_annexb;
@@ -95,7 +95,24 @@ fn main() -> Result<(), RsmpegError> {
         .open("assets/decode/out.h264")
         .unwrap();
 
-    let mut display_prop = display_init(decode_context.width as u32, decode_context.height as u32);
+    // let sdl_context = sdl2::init().unwrap();
+    // let mut display_prop = display_init(
+    //     sdl_context,
+    //     decode_context.width as u32,
+    //     decode_context.height as u32,
+    // );
+
+    // let binding: sdl2::render::TextureCreator<sdl2::video::WindowContext> = display_prop.canvas.texture_creator();
+
+    // let mut texture: sdl2::render::Texture<'_> = binding
+    //     .create_texture_streaming(
+    //         sdl2::pixels::PixelFormatEnum::IYUV,
+    //         decode_context.width as u32,
+    //         decode_context.height as u32,
+    //     )
+    //     .map_err(|e| e.to_string())
+    //     .unwrap()
+    //     .into();
 
     // let sdl_context = sdl2::init().unwrap();
     // let video_subsystem = sdl_context.video().unwrap();
@@ -208,48 +225,59 @@ fn main() -> Result<(), RsmpegError> {
                 unsafe { slice::from_raw_parts(u, size / 4 as usize) },
                 unsafe { slice::from_raw_parts(v, size / 4 as usize) },
             );
-            display_prop.texture
-                .update_yuv(
-                    None,
-                    y_buf,
-                    decode_context.width as usize,
-                    u_buf,
-                    (decode_context.width / 2) as usize,
-                    v_buf,
-                    (decode_context.width / 2) as usize,
-                )
-                .unwrap();
 
-            display_prop.canvas.clear();
+            // display_prop.update_yuv(
+            //     y_buf,
+            //     decode_context.width as usize,
+            //     u_buf,
+            //     (decode_context.width / 2) as usize,
+            //     v_buf,
+            //     (decode_context.width / 2) as usize,
+            // );
 
-            display_prop.canvas
-                .copy(
-                    &display_prop.texture,
-                    None,
-                    sdl2::rect::Rect::new(
-                        0,
-                        0,
-                        decode_context.width as u32,
-                        decode_context.height as u32,
-                    ),
-                )
-                .unwrap();
-            display_prop.canvas.present();
+            // texture
+            //     .update_yuv(
+            //         None,
+            //         y_buf,
+            //         decode_context.width as usize,
+            //         u_buf,
+            //         (decode_context.width / 2) as usize,
+            //         v_buf,
+            //         (decode_context.width / 2) as usize,
+            //     )
+            //     .unwrap();
+
+            // display_prop.canvas.clear();
+
+            // display_prop
+            //     .canvas
+            //     .copy(
+            //         &texture,
+            //         None,
+            //         sdl2::rect::Rect::new(
+            //             0,
+            //             0,
+            //             decode_context.width as u32,
+            //             decode_context.height as u32,
+            //         ),
+            //     )
+            //     .unwrap();
+            // display_prop.canvas.present();
 
             // file_save_yuv420p(&frame_rgb, &mut file);
             let time: std::time::Duration = std::time::Duration::from_millis(video_fps);
             std::thread::sleep(time);
 
-            for event in display_prop.event_pump.poll_iter() {
-                match event {
-                    Event::Quit { .. }
-                    | Event::KeyDown {
-                        keycode: Some(Keycode::Escape),
-                        ..
-                    } => break 'running,
-                    _ => {}
-                }
-            }
+            // for event in display_prop.event_pump.poll_iter() {
+            //     match event {
+            //         Event::Quit { .. }
+            //         | Event::KeyDown {
+            //             keycode: Some(Keycode::Escape),
+            //             ..
+            //         } => break 'running,
+            //         _ => {}
+            //     }
+            // }
         }
     }
     Ok(())
