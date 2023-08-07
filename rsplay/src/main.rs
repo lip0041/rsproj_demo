@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 #![allow(unused)]
-// mod sdl2_display;
+mod sdl2_display;
 mod utils;
 
 use rsmpeg::avcodec::{AVCodec, AVCodecContext, AVCodecParserContext, AVPacket};
@@ -9,9 +9,8 @@ use rsmpeg::avutil::{AVFrame, AVFrameWithImage, AVImage};
 use rsmpeg::error::RsmpegError;
 use rsmpeg::ffi::{self, fileno, AV_INPUT_BUFFER_PADDING_SIZE};
 use rsmpeg::swscale::SwsContext;
-// use sdl2;
-// use sdl2::event::Event;
-// use sdl2::keyboard::Keycode;
+use sdl2::event::Event;
+use sdl2::keyboard::Keycode;
 use std::env;
 use std::{
     error::Error,
@@ -21,7 +20,7 @@ use std::{
     slice,
 };
 
-// use sdl2_display::display_init;
+use sdl2_display::display_init;
 use utils::dump_av_info;
 use utils::file_save_yuv420p;
 use utils::h264_extradata_to_annexb;
@@ -34,7 +33,7 @@ fn main() -> Result<(), RsmpegError> {
         file_name += &args[1];
     }
 
-    dump_av_info(&CString::new(file_name.clone()).unwrap()).unwrap();
+    // dump_av_info(&CString::new(file_name.clone()).unwrap()).unwrap();
 
     let file = CString::new(file_name).unwrap();
 
@@ -95,66 +94,22 @@ fn main() -> Result<(), RsmpegError> {
         .open("assets/decode/out.h264")
         .unwrap();
 
-    // let sdl_context = sdl2::init().unwrap();
-    // let mut display_prop = display_init(
-    //     sdl_context,
-    //     decode_context.width as u32,
-    //     decode_context.height as u32,
-    // );
-
-    // let binding: sdl2::render::TextureCreator<sdl2::video::WindowContext> = display_prop.canvas.texture_creator();
-
-    // let mut texture: sdl2::render::Texture<'_> = binding
-    //     .create_texture_streaming(
-    //         sdl2::pixels::PixelFormatEnum::IYUV,
-    //         decode_context.width as u32,
-    //         decode_context.height as u32,
-    //     )
-    //     .map_err(|e| e.to_string())
-    //     .unwrap()
-    //     .into();
-
-    // let sdl_context = sdl2::init().unwrap();
-    // let video_subsystem = sdl_context.video().unwrap();
-    // let audio_subsystem = sdl_context.audio().unwrap();
-    // let mut event_pump = sdl_context.event_pump().unwrap();
-
-    // let window = video_subsystem
-    //     .window(
-    //         "rsplay",
-    //         decode_context.width as u32,
-    //         decode_context.height as u32,
-    //     )
-    //     .position_centered()
-    //     .opengl()
-    //     .build()
-    //     .map_err(|e| e.to_string())
-    //     .unwrap();
-
-    // let mut canvas = window
-    //     .into_canvas()
-    //     .build()
-    //     .map_err(|e| e.to_string())
-    //     .unwrap();
-
-    // let texture_creator = canvas.texture_creator();
-    // let mut texture = texture_creator
-    //     .create_texture_streaming(
-    //         sdl2::pixels::PixelFormatEnum::IYUV,
-    //         decode_context.width as u32,
-    //         decode_context.height as u32,
-    //     )
-    //     .map_err(|e| e.to_string())
-    //     .unwrap();
+    let sdl_context = sdl2::init().unwrap();
+    let mut display_prop = display_init(
+        sdl_context,
+        decode_context.width as u32,
+        decode_context.height as u32,
+    );
 
     let start_code0 = &[0u8, 0, 0, 1];
     let start_code1 = &[0u8, 0, 1];
 
     let mut i = 0;
+    let extract_h264 = false;
     'running: while let Some(packet) = input_format_context.read_packet().unwrap() {
         if packet.stream_index != video_stream_index as i32 {
             continue;
-        } else {
+        } else if extract_h264 {
             let mut pdata: *mut u8 = packet.data;
             let psize = packet.size;
             let pend: *mut u8 = pdata.wrapping_add(psize as usize);
@@ -204,6 +159,7 @@ fn main() -> Result<(), RsmpegError> {
                 cursize += nalu_size;
             }
         }
+
         decode_context.send_packet(Some(&packet))?;
 
         loop {
@@ -226,58 +182,28 @@ fn main() -> Result<(), RsmpegError> {
                 unsafe { slice::from_raw_parts(v, size / 4 as usize) },
             );
 
-            // display_prop.update_yuv(
-            //     y_buf,
-            //     decode_context.width as usize,
-            //     u_buf,
-            //     (decode_context.width / 2) as usize,
-            //     v_buf,
-            //     (decode_context.width / 2) as usize,
-            // );
+            display_prop.update_yuv(
+                y_buf,
+                decode_context.width as usize,
+                u_buf,
+                (decode_context.width / 2) as usize,
+                v_buf,
+                (decode_context.width / 2) as usize,
+            );
 
-            // texture
-            //     .update_yuv(
-            //         None,
-            //         y_buf,
-            //         decode_context.width as usize,
-            //         u_buf,
-            //         (decode_context.width / 2) as usize,
-            //         v_buf,
-            //         (decode_context.width / 2) as usize,
-            //     )
-            //     .unwrap();
-
-            // display_prop.canvas.clear();
-
-            // display_prop
-            //     .canvas
-            //     .copy(
-            //         &texture,
-            //         None,
-            //         sdl2::rect::Rect::new(
-            //             0,
-            //             0,
-            //             decode_context.width as u32,
-            //             decode_context.height as u32,
-            //         ),
-            //     )
-            //     .unwrap();
-            // display_prop.canvas.present();
-
-            // file_save_yuv420p(&frame_rgb, &mut file);
             let time: std::time::Duration = std::time::Duration::from_millis(video_fps);
             std::thread::sleep(time);
 
-            // for event in display_prop.event_pump.poll_iter() {
-            //     match event {
-            //         Event::Quit { .. }
-            //         | Event::KeyDown {
-            //             keycode: Some(Keycode::Escape),
-            //             ..
-            //         } => break 'running,
-            //         _ => {}
-            //     }
-            // }
+            for event in display_prop.event_pump.poll_iter() {
+                match event {
+                    Event::Quit { .. }
+                    | Event::KeyDown {
+                        keycode: Some(Keycode::Escape),
+                        ..
+                    } => break 'running,
+                    _ => {}
+                }
+            }
         }
     }
     Ok(())
