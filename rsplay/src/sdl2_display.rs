@@ -9,6 +9,7 @@ pub struct DisplayProp {
     pub event_pump: sdl2::EventPump,
     width: u32,
     height: u32,
+    device: sdl2::audio::AudioDevice<Sound>,
 }
 
 pub struct VideoParams {
@@ -113,7 +114,7 @@ pub fn display_init(
         samples: None,
     };
 
-    let device = audio_subsystem
+    let device: sdl2::audio::AudioDevice<Sound> = audio_subsystem
         .open_playback(None, &desired_spec, |spec| {
             let data: Vec<u8> = Vec::new();
             Sound {
@@ -145,5 +146,6 @@ pub fn display_init(
         event_pump,
         width,
         height,
+        device
     }
 }

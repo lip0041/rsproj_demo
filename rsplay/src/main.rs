@@ -4,10 +4,11 @@ mod sdl2_display;
 mod utils;
 
 use rsmpeg::avcodec::{AVCodec, AVCodecContext, AVCodecParserContext, AVPacket};
-use rsmpeg::avformat::AVFormatContextInput;
-use rsmpeg::avutil::{AVFrame, AVFrameWithImage, AVImage};
+use rsmpeg::avformat::{AVFormatContextInput, AVIOContext, AVIOContextContainer, AVIOContextURL};
+use rsmpeg::avutil::{AVDictionary, AVFrame, AVFrameWithImage, AVImage, AVSampleFormat, AVSamples};
 use rsmpeg::error::RsmpegError;
-use rsmpeg::ffi::{self, fileno, AV_INPUT_BUFFER_PADDING_SIZE};
+use rsmpeg::ffi::{self, fileno, AVSampleFormat_AV_SAMPLE_FMT_FLT, AV_INPUT_BUFFER_PADDING_SIZE};
+use rsmpeg::swresample::{self, SwrContext};
 use rsmpeg::swscale::SwsContext;
 use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
@@ -37,19 +38,20 @@ fn main() -> Result<(), RsmpegError> {
     // dump_av_info(&CString::new(file_name.clone()).unwrap()).unwrap();
 
     let file = CString::new(file_name).unwrap();
+    // wait for the registry update
+    let rtsp_key = CString::new("rtsp_transport").unwrap();
+    let rtsp_value = CString::new("tcp").unwrap();
+    let options: AVDictionary = AVDictionary::new(&rtsp_key, &rtsp_value, 0);
+    // let url = CString::new("rtsp://192.168.62.152:8554/stream").unwrap();
 
-    let mut input_format_context = AVFormatContextInput::open(&file)?;
+    let url = CString::new("rtmp://127.0.0.1:1935/live/test").unwrap();
+
+    let mut input_format_context = AVFormatContextInput::open(&url)?;
 
     let video_stream_index = input_format_context
         .streams()
         .into_iter()
         .position(|stream| stream.codecpar().codec_type().is_video())
-        .unwrap();
-
-    let audio_stream_index = input_format_context
-        .streams()
-        .into_iter()
-        .position(|stream| stream.codecpar().codec_type().is_audio())
         .unwrap();
 
     let mut video_decode_context = {
@@ -66,6 +68,12 @@ fn main() -> Result<(), RsmpegError> {
         video_decode_context
     };
 
+    let audio_stream_index = input_format_context
+        .streams()
+        .into_iter()
+        .position(|stream| stream.codecpar().codec_type().is_audio())
+        .unwrap();
+
     let mut audio_decode_context = {
         let audio_stream = input_format_context
             .streams()
@@ -78,7 +86,7 @@ fn main() -> Result<(), RsmpegError> {
         audio_decode_context.open(None);
         audio_decode_context
     };
-
+    // video config
     let frame_rate = input_format_context
         .streams()
         .get(video_stream_index)
@@ -107,9 +115,32 @@ fn main() -> Result<(), RsmpegError> {
         ffi::SWS_FAST_BILINEAR,
     )
     .unwrap();
+    // audio config
+    let mut swr_context = SwrContext::new(
+        audio_decode_context.ch_layout.nb_channels as u64,
+        AVSampleFormat_AV_SAMPLE_FMT_FLT,
+        audio_decode_context.sample_rate,
+        audio_decode_context.ch_layout.nb_channels as u64,
+        audio_decode_context.sample_fmt,
+        audio_decode_context.sample_rate,
+    )
+    .unwrap();
 
-    // let mut file = File::create("assets/decode/out.h264").unwrap();
-    let mut file = fs::OpenOptions::new()
+    swr_context.init();
+    let mut swr_buffer = AVSamples::new(
+        audio_decode_context.ch_layout.nb_channels,
+        audio_decode_context.frame_size,
+        AVSampleFormat_AV_SAMPLE_FMT_FLT,
+        0,
+    )
+    .unwrap();
+
+    let mut audio_file = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .open("assets/decode/out.pcm")
+        .unwrap();
+    let mut video_file = fs::OpenOptions::new()
         .write(true)
         .create(true)
         .open("assets/decode/out.h264")
@@ -126,7 +157,12 @@ fn main() -> Result<(), RsmpegError> {
         audio_decode_context.ch_layout.nb_channels as u8,
         audio_decode_context.frame_size,
     );
-
+    println!(
+        "{:?}, {:?}, {:?}",
+        audio_decode_context.sample_rate,
+        audio_decode_context.ch_layout.nb_channels,
+        audio_decode_context.frame_size
+    );
     let mut display_prop = display_init(sdl_context, video_params, audio_params);
 
     let start_code0 = &[0u8, 0, 0, 1];
@@ -138,7 +174,32 @@ fn main() -> Result<(), RsmpegError> {
     let start = std::time::Instant::now();
     'running: while let Some(packet) = input_format_context.read_packet().unwrap() {
         if packet.stream_index == audio_stream_index as i32 {
-            // audio_decode_context.send_packet(Some(&packet))?;
+            continue;
+            audio_decode_context.send_packet(Some(&packet))?;
+            loop {
+                let frame = match audio_decode_context.receive_frame() {
+                    Ok(frame) => frame,
+                    Err(RsmpegError::DecoderDrainError) | Err(RsmpegError::DecoderFlushedError) => {
+                        break;
+                    }
+                    Err(e) => return Err(e.into()),
+                };
+                unsafe {
+                    swr_context.convert(
+                        &mut swr_buffer,
+                        frame.data.as_ptr().cast(),
+                        frame.nb_samples,
+                    )
+                };
+                audio_file
+                    .write_all(unsafe {
+                        slice::from_raw_parts(
+                            swr_buffer.audio_data.as_ptr().cast(),
+                            swr_buffer.nb_samples as usize,
+                        )
+                    })
+                    .unwrap();
+            }
         } else if packet.stream_index == video_stream_index as i32 {
             if extract_h264 {
                 let mut pdata: *mut u8 = packet.data;
@@ -161,10 +222,10 @@ fn main() -> Result<(), RsmpegError> {
                     let nal_type = unsafe { nal_header.read() } & 0x1f;
                     // println!("naltype: {}, nalsize: {}", nal_type, nalu_size);
                     if nal_type == 6 {
-                        file.write_all(start_code0).unwrap();
+                        video_file.write_all(start_code0).unwrap();
                         let h264_data: &[u8] =
                             unsafe { slice::from_raw_parts(nal_header, nalu_size as usize) };
-                        file.write_all(h264_data).unwrap();
+                        video_file.write_all(h264_data).unwrap();
                     } else if nal_type == 5 {
                         let extra_data = input_format_context
                             .streams()
@@ -179,13 +240,14 @@ fn main() -> Result<(), RsmpegError> {
                             .codecpar()
                             .extradata_size;
 
-                        file.write_all(h264_extradata_to_annexb(extra_data, extra_data_size))
+                        video_file
+                            .write_all(h264_extradata_to_annexb(extra_data, extra_data_size))
                             .unwrap();
                     }
-                    file.write_all(start_code1).unwrap();
+                    video_file.write_all(start_code1).unwrap();
                     let h264_data: &[u8] =
                         unsafe { slice::from_raw_parts(pdata, nalu_size as usize) };
-                    file.write_all(h264_data).unwrap();
+                    video_file.write_all(h264_data).unwrap();
 
                     pdata = pdata.wrapping_add(nalu_size as usize);
                     cursize += nalu_size;
