@@ -5,9 +5,14 @@ mod utils;
 
 use rsmpeg::avcodec::{AVCodec, AVCodecContext, AVCodecParserContext, AVPacket};
 use rsmpeg::avformat::{AVFormatContextInput, AVIOContext, AVIOContextContainer, AVIOContextURL};
-use rsmpeg::avutil::{AVDictionary, AVFrame, AVFrameWithImage, AVImage, AVSampleFormat, AVSamples};
+use rsmpeg::avutil::{
+    self, AVDictionary, AVFrame, AVFrameWithImage, AVImage, AVSampleFormat, AVSamples,
+};
 use rsmpeg::error::RsmpegError;
-use rsmpeg::ffi::{self, fileno, AVSampleFormat_AV_SAMPLE_FMT_FLT, AV_INPUT_BUFFER_PADDING_SIZE};
+use rsmpeg::ffi::{
+    self, fileno, AVRational, AVSampleFormat_AV_SAMPLE_FMT_FLT, AV_INPUT_BUFFER_PADDING_SIZE,
+    AV_TIME_BASE_Q,
+};
 use rsmpeg::swresample::{self, SwrContext};
 use rsmpeg::swscale::SwsContext;
 use sdl2::event::Event;
@@ -46,7 +51,7 @@ fn main() -> Result<(), RsmpegError> {
 
     let url = CString::new("rtmp://127.0.0.1:1935/live/test").unwrap();
 
-    let mut input_format_context = AVFormatContextInput::open(&url)?;
+    let mut input_format_context = AVFormatContextInput::open(&file)?;
 
     let video_stream_index = input_format_context
         .streams()
@@ -94,7 +99,13 @@ fn main() -> Result<(), RsmpegError> {
         .avg_frame_rate;
 
     let video_fps = (frame_rate.num as f64 / frame_rate.den as f64).ceil() as u64;
-    println!("fps: {video_fps}");
+    let video_time_base = input_format_context
+        .streams()
+        .get(video_stream_index)
+        .unwrap()
+        .time_base;
+    let time_base_q = AV_TIME_BASE_Q;
+    // println!("fps: {video_fps}");
     let image_buffer = AVImage::new(
         ffi::AVPixelFormat_AV_PIX_FMT_YUV420P,
         video_decode_context.width,
@@ -115,25 +126,31 @@ fn main() -> Result<(), RsmpegError> {
         ffi::SWS_FAST_BILINEAR,
     )
     .unwrap();
+
     // audio config
     let mut swr_context = SwrContext::new(
-        audio_decode_context.ch_layout.nb_channels as u64,
+        audio_decode_context.channel_layout as u64,
         AVSampleFormat_AV_SAMPLE_FMT_FLT,
         audio_decode_context.sample_rate,
-        audio_decode_context.ch_layout.nb_channels as u64,
+        audio_decode_context.channel_layout as u64,
         audio_decode_context.sample_fmt,
         audio_decode_context.sample_rate,
     )
     .unwrap();
 
     swr_context.init();
-    let mut swr_buffer = AVSamples::new(
+
+    let (_, swr_buffer_size) = AVSamples::get_buffer_size(
         audio_decode_context.ch_layout.nb_channels,
         audio_decode_context.frame_size,
         AVSampleFormat_AV_SAMPLE_FMT_FLT,
         0,
     )
     .unwrap();
+
+    // write file
+    let extract_h264 = false;
+    let write_pcm = true;
 
     let mut audio_file = fs::OpenOptions::new()
         .write(true)
@@ -157,24 +174,25 @@ fn main() -> Result<(), RsmpegError> {
         audio_decode_context.ch_layout.nb_channels as u8,
         audio_decode_context.frame_size,
     );
-    println!(
-        "{:?}, {:?}, {:?}",
-        audio_decode_context.sample_rate,
-        audio_decode_context.ch_layout.nb_channels,
-        audio_decode_context.frame_size
-    );
+
     let mut display_prop = display_init(sdl_context, video_params, audio_params);
 
     let start_code0 = &[0u8, 0, 0, 1];
     let start_code1 = &[0u8, 0, 1];
 
-    let mut i = 0;
-    let extract_h264 = false;
-
-    let start = std::time::Instant::now();
+    let mut first_frame = true;
+    let mut played_time: i64 = 0;
+    let mut start = std::time::Instant::now();
+    let mut running = true;
+    let mut pause = false;
+    // 'running: while running {
+    // if pause {
+    //     println!("play pause, delay 10ms");
+    //     std::thread::sleep(std::time::Duration::from_millis(10));
+    //     continue;
+    // }
     'running: while let Some(packet) = input_format_context.read_packet().unwrap() {
         if packet.stream_index == audio_stream_index as i32 {
-            continue;
             audio_decode_context.send_packet(Some(&packet))?;
             loop {
                 let frame = match audio_decode_context.receive_frame() {
@@ -184,21 +202,29 @@ fn main() -> Result<(), RsmpegError> {
                     }
                     Err(e) => return Err(e.into()),
                 };
-                unsafe {
-                    swr_context.convert(
-                        &mut swr_buffer,
-                        frame.data.as_ptr().cast(),
-                        frame.nb_samples,
-                    )
-                };
-                audio_file
-                    .write_all(unsafe {
-                        slice::from_raw_parts(
-                            swr_buffer.audio_data.as_ptr().cast(),
-                            swr_buffer.nb_samples as usize,
-                        )
-                    })
-                    .unwrap();
+                let mut pcm_frame: AVFrame = AVFrame::new();
+                pcm_frame.set_channel_layout(audio_decode_context.channel_layout as u64);
+                pcm_frame.set_format(AVSampleFormat_AV_SAMPLE_FMT_FLT);
+                pcm_frame.set_sample_rate(audio_decode_context.sample_rate);
+                // println!(
+                //     "frame config: {:}, {:}, {:}",
+                //     frame.channel_layout, frame.format, frame.sample_rate
+                // );
+
+                // println!(
+                //     "pcm config: {:}, {:}, {:}",
+                //     pcm_frame.channel_layout, pcm_frame.format, pcm_frame.sample_rate
+                // );
+
+                swr_context.convert_frame(Some(&frame), &mut pcm_frame)?;
+                // packed, just use data[0]
+                if write_pcm {
+                    audio_file
+                        .write_all(unsafe {
+                            slice::from_raw_parts(pcm_frame.data[0], swr_buffer_size as usize)
+                        })
+                        .unwrap();
+                }
             }
         } else if packet.stream_index == video_stream_index as i32 {
             if extract_h264 {
@@ -264,10 +290,8 @@ fn main() -> Result<(), RsmpegError> {
                     }
                     Err(e) => return Err(e.into()),
                 };
-
                 sws_context.scale_frame(&frame, 0, video_decode_context.height, &mut frame_rgb)?;
 
-                i += 1;
                 let (y, u, v) = (frame_rgb.data[0], frame_rgb.data[1], frame_rgb.data[2]);
                 let size: usize = (frame_rgb.width * frame_rgb.height).try_into().unwrap();
                 let (y_buf, u_buf, v_buf) = (
@@ -284,9 +308,24 @@ fn main() -> Result<(), RsmpegError> {
                     v_buf,
                     (video_decode_context.width / 2) as usize,
                 );
-
-                let time: std::time::Duration = std::time::Duration::from_millis(video_fps);
-                std::thread::sleep(time);
+                if first_frame {
+                    played_time = avutil::av_rescale_q(frame.pts, video_time_base, time_base_q);
+                    let duration =
+                        avutil::av_rescale_q(frame.duration, video_time_base, time_base_q);
+                    played_time -= duration;
+                    first_frame = false;
+                }
+                let pts_time =
+                    rsmpeg::avutil::av_rescale_q(frame.pts, video_time_base, time_base_q);
+                let now_time = start.elapsed().as_micros() as i64;
+                // println!("{pts_time}, {now_time}");
+                if (pts_time - played_time > now_time) {
+                    let time: std::time::Duration = std::time::Duration::from_micros(
+                        (pts_time - now_time - played_time) as u64,
+                    );
+                    // println!("need sleep {:?}", time.as_micros());
+                    std::thread::sleep(time);
+                }
 
                 for event in display_prop.event_pump.poll_iter() {
                     match event {
@@ -295,12 +334,27 @@ fn main() -> Result<(), RsmpegError> {
                             keycode: Some(Keycode::Escape),
                             ..
                         } => break 'running,
+                        // Event::KeyDown {
+                        //     keycode: Some(Keycode::Space),
+                        //     ..
+                        // } => {
+                        //     println!("catch pause keydown");
+                        //     pause = !pause;
+                        //     break 'decoding;
+                        // }
                         _ => {}
                     }
                 }
             }
         }
+        // }
     }
     println!("play time: {:?} ms", start.elapsed().as_millis());
+    if !extract_h264 {
+        fs::remove_file("assets/decode/out.h264").unwrap();
+    }
+    if !write_pcm {
+        fs::remove_file("assets/decode/out.pcm").unwrap();
+    }
     Ok(())
 }
