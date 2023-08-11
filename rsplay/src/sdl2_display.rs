@@ -1,3 +1,8 @@
+use std::fs::{self, File};
+use std::io::Write;
+use std::sync::{Arc, Mutex};
+
+use rand::{self, Rng};
 use sdl2::{
     self,
     audio::{AudioCallback, AudioSpecDesired},
@@ -10,6 +15,7 @@ pub struct DisplayProp {
     width: u32,
     height: u32,
     device: sdl2::audio::AudioDevice<Sound>,
+    audio_data: Arc<Mutex<Vec<u8>>>,
 }
 
 pub struct VideoParams {
@@ -40,22 +46,44 @@ impl AudioParams {
 }
 
 struct Sound {
-    data: Vec<u8>,
+    data: Arc<Mutex<Vec<u8>>>,
     volume: f32,
-    pos: usize,
+    samples: usize,
+    audio_file: File,
 }
 
 impl AudioCallback for Sound {
-    type Channel = u8;
+    type Channel = f32;
 
     fn callback(&mut self, out: &mut [Self::Channel]) {
-        for dst in out.iter_mut() {
-            let pre_scale = *self.data.get(self.pos).unwrap_or(&128);
-            let scaled_signed_float = (pre_scale as f32 - 128.0) * self.volume;
-            let scaled = (scaled_signed_float + 128.0) as u8;
-            *dst = scaled;
-            self.pos += 1;
+        let mut binding = self.data.lock().unwrap();
+        let audio_data = binding.as_slice();
+        println!("after callback {:?}, {:?}", out.len(), audio_data.len());
+        if (audio_data.len() != 32768) {
+            return;
         }
+        println!("audio_data len: {:?}", audio_data.len());
+        let mut f32_data = unsafe {
+            std::mem::transmute::<[u8; 32768], [f32; 8192]>(audio_data.try_into().unwrap())
+        };
+
+        // self.audio_file.write_all(audio_data).unwrap();
+        let mut index = 0;
+        for dst in out.iter_mut() {
+            let pre_scale = f32_data.get(index).unwrap();
+            *dst = *pre_scale * self.volume;
+            index += 1;
+        }
+        // out.as_mut().swap_with_slice(f32_data.as_mut());
+
+        // use self::rand::{thread_rng, Rng};
+        // let mut rng = thread_rng();
+
+        // // Generate white noise
+        // for x in out.iter_mut() {
+        //     let y: f32 = rng.gen();
+        //     *x = (y * self.volume);
+        // }
     }
 }
 
@@ -96,6 +124,18 @@ impl DisplayProp {
             .unwrap();
         self.canvas.present();
     }
+
+    pub fn updata_pcm(&mut self, data: &[u8]) {
+        // self.device.pause();
+        {
+            let mut lock = self.device.lock();
+            if (*lock).data.lock().unwrap().len() >= 32768 {
+                (*lock).data.lock().unwrap().clear();
+            }
+            (*lock).data.lock().unwrap().extend_from_slice(data);
+        }
+        // self.device.resume();
+    }
 }
 
 pub fn display_init(
@@ -105,22 +145,32 @@ pub fn display_init(
 ) -> DisplayProp {
     let video_subsystem = sdl_context.video().unwrap();
     let audio_subsystem = sdl_context.audio().unwrap();
+
     let event_pump: sdl2::EventPump = sdl_context.event_pump().unwrap();
     let width = video_params.width;
     let height = video_params.height;
-    let desired_spec = AudioSpecDesired {
+    let desired_spec: AudioSpecDesired = AudioSpecDesired {
         freq: Some(audio_params.freq),
         channels: Some(audio_params.channels),
-        samples: None,
+        samples: Some(4096),
     };
 
+    let audio_data: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+
+    println!(
+        "after new {:?}, {:?}, {:?}",
+        desired_spec.freq, desired_spec.channels, desired_spec.samples
+    );
     let device: sdl2::audio::AudioDevice<Sound> = audio_subsystem
         .open_playback(None, &desired_spec, |spec| {
-            let data: Vec<u8> = Vec::new();
+            println!("{:?}", spec);
+
+            let mut audio_file = fs::File::create("assets/decode/sdlpcm.h264").unwrap();
             Sound {
-                data,
-                volume: 0.5,
-                pos: 0,
+                data: audio_data.clone(),
+                volume: 0.8,
+                samples: spec.samples as usize,
+                audio_file,
             }
         })
         .unwrap();
@@ -146,6 +196,7 @@ pub fn display_init(
         event_pump,
         width,
         height,
-        device
+        device,
+        audio_data,
     }
 }

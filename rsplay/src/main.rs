@@ -151,17 +151,8 @@ fn main() -> Result<(), RsmpegError> {
     // write file
     let extract_h264 = false;
     let write_pcm = true;
-
-    let mut audio_file = fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .open("assets/decode/out.pcm")
-        .unwrap();
-    let mut video_file = fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .open("assets/decode/out.h264")
-        .unwrap();
+    let mut audio_file = fs::File::create("assets/decode/out.pcm").unwrap();
+    let mut video_file = fs::File::create("assets/decode/out.h264").unwrap();
 
     let sdl_context = sdl2::init().unwrap();
     let video_params: VideoParams = VideoParams::new(
@@ -191,6 +182,8 @@ fn main() -> Result<(), RsmpegError> {
     //     std::thread::sleep(std::time::Duration::from_millis(10));
     //     continue;
     // }
+    let mut audio_count = 0;
+    let mut pcm_data: Vec<u8> = Vec::new();
     'running: while let Some(packet) = input_format_context.read_packet().unwrap() {
         if packet.stream_index == audio_stream_index as i32 {
             audio_decode_context.send_packet(Some(&packet))?;
@@ -217,13 +210,25 @@ fn main() -> Result<(), RsmpegError> {
                 // );
 
                 swr_context.convert_frame(Some(&frame), &mut pcm_frame)?;
+                audio_count += 1;
+                unsafe {
+                    println!(
+                        "after decode {:x}, {:x}",
+                        pcm_frame.data[0].read(),
+                        pcm_frame.data[0].wrapping_add(1).read()
+                    );
+                }
+                let pcm =
+                    unsafe { slice::from_raw_parts(pcm_frame.data[0], swr_buffer_size as usize) };
                 // packed, just use data[0]
+                pcm_data.extend_from_slice(pcm);
+                if audio_count == 4 {
+                    display_prop.updata_pcm(pcm_data.as_slice());
+                    pcm_data.clear();
+                    audio_count = 0;
+                }
                 if write_pcm {
-                    audio_file
-                        .write_all(unsafe {
-                            slice::from_raw_parts(pcm_frame.data[0], swr_buffer_size as usize)
-                        })
-                        .unwrap();
+                    audio_file.write_all(pcm).unwrap();
                 }
             }
         } else if packet.stream_index == video_stream_index as i32 {
