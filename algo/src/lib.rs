@@ -1,4 +1,5 @@
 pub mod sorting;
+pub mod string;
 pub mod data_structures;
 
 pub fn add(left: usize, right: usize) -> usize {
